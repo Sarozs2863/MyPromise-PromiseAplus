@@ -18,6 +18,8 @@ class MyPromise {
     // 失败时要执行的队列
     this.onRejectedCallbacks = [];
 
+    const self = this
+
     // 交给executor使用，让它成功时
     // 1)将MyPromise状态改为fulfilled
     // 2)保存成功的结果
@@ -25,18 +27,18 @@ class MyPromise {
     // 使用箭头函数是因为要保证this指向仍然为实例
     const resolve = (value) => {
       // 注意！！！只能由pending转换为fulfilled
-      if (this.status === PENDING) {
-        this.status = FULFILLED;
-        this.value = value;
-        this.onFulfilledCallbacks.forEach((callback) => callback());
+      if (self.status === PENDING) {
+        self.status = FULFILLED;
+        self.value = value;
+        self.onFulfilledCallbacks.forEach((callback) => callback());
       }
     };
     // 和resolve是对称的，fulfilled和rejected是平行对立的两种状态
     const reject = (reason) => {
-      if (this.status === PENDING) {
-        this.status = REJECTED;
-        this.reason = reason;
-        this.onRejectedCallbacks.forEach((callback) => callback());
+      if (self.status === PENDING) {
+        self.status = REJECTED;
+        self.reason = reason;
+        self.onRejectedCallbacks.forEach((callback) => callback());
       }
     };
     // 立即尝试执行executor
@@ -58,8 +60,8 @@ class MyPromise {
       typeof onRejected === "function"
         ? onRejected
         : (reason) => {
-            throw reason;
-          };
+          throw reason;
+        };
 
     const currentPromise = this;
     // then方法要实现链式调用，必须返回一个Promise对象！
@@ -121,7 +123,12 @@ class MyPromise {
 
     return MyPromise2;
   }
+
+  catch(onRejected) {
+    return this.then(null, onRejected)
+  }
 }
+
 
 const resolveMyPromise = (MyPromiseNeededBeResolved, x, resolve, reject) => {
   // x就是用来完结MyPromise的依据
@@ -135,7 +142,7 @@ const resolveMyPromise = (MyPromiseNeededBeResolved, x, resolve, reject) => {
     // 用最优先的那个解决一次
     let used = false;
     try {
-      // 尝试获取then方法
+      // 尝试获取then方法3
       const then = x.then;
       // 判断then是不是真的存在的方法
       if (typeof then === "function") {
@@ -177,6 +184,125 @@ const resolveMyPromise = (MyPromiseNeededBeResolved, x, resolve, reject) => {
     resolve(x);
   }
 };
+
+MyPromise.resolve = (value) => {
+  // 如果value是Promise，则直接返回value
+  if (value instanceof MyPromise) return value
+
+  return new MyPromise((resolve, reject) => {
+    // thenable
+    if (value && value.then && typeof value.then === 'function') {
+      value.then(resolve, reject)
+    }
+    // 其他
+    else {
+      resolve(value)
+    }
+  })
+}
+/*
+限流该怎么做？
+- 同一时间内，只能有limit个Promise在执行中
+- 问题
+  - 可是Promise在创建时executor就会执行
+    - 怎么解决？
+      - 只传入需要执行的函数队列
+      - 并且给定一个limit值
+      - 内部同一时间下最多只能存在limit个pending的Promise
+  - 怎么保证顺序的正确性？
+    - 在then中指明
+  - 怎么保证limit个？
+    - 先加上5个
+    - 下一个上一个
+      - 如果还有的话
+      - 具体怎么做？
+        - 像递归一样
+  - 什么情况下结束？
+    - fulfilled数量 = executors.length
+*/
+MyPromise.limitAll = function (executors, limit) {
+  return new Promise((resolve, reject) => {
+
+    let result = new Array(executors.length).fill(undefined)
+    let nextIndex = limit
+    let fulfilledCount = 0
+
+    const makeNewPromise = (index) => {
+      new Promise(executors[index])
+        .then(
+          value => {
+            fulfilledCount++
+            result[index] = value
+            if (nextIndex < executors.length) {
+              makeNewPromise(nextIndex++)
+            }
+            if (fulfilledCount === executors.length) {
+              resolve(result)
+            }
+          }
+        ).catch(err => reject(err))
+    }
+
+    for (let i = 0; i < limit; i++) {
+      makeNewPromise(i)
+    }
+  })
+}
+
+MyPromise.all = function (promises) {
+  return new Promise((resolve, reject) => {
+    let index = 0
+    let result = []
+    if (promises.length = 0) {
+      resolve(result)
+    } else {
+      function processValue(i, data) {
+        result[i] = data
+        if (++index === promises.length) {
+          resolve(result)
+        }
+      }
+
+      for (let i = 0; i < promises.length; i++) {
+        Promise.resolve(promises[i]).
+          then(value => processValue(i, value),
+            (err) => {
+              reject(err)
+              return
+            }
+          )
+      }
+    }
+  })
+}
+/*
+思路：
+- 关键是什么？
+  - 找到第一个fulfilled就解决要返回的Promise
+    - 怎么实现？
+      - promises遍历
+      - 每一个都指明then和catch
+*/
+MyPromise.race = function (promises) {
+  // 返回MyPromise
+  return new MyPromise((resolve, reject) => {
+    // 遍历Promises
+    for (const promise of promises) {
+      MyPromise.resolve(promise)
+        .then(value => resolve(value))
+        .catch(err => reject(err))
+    }
+    // 如果promises为空，Promise永远为pending
+    return
+  })
+}
+
+MyPromise.reject = (reason) => {
+  // 原封不动的用reason reject MyPromise
+  return new MyPromise((resolve, reject) => {
+    reject(reason)
+  })
+}
 
 // 为了兼容promises-aplus-tests测试工具
 MyPromise.deferred = function () {
